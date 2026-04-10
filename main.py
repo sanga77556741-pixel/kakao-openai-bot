@@ -1,180 +1,148 @@
 import os
-import json
-import re
-from typing import Any, Dict, List
+from typing import Optional
 
+import psycopg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from openai import OpenAI
 
 app = FastAPI()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL 환경변수가 설정되지 않았습니다.")
 
-SYSTEM_PROMPT = """
-너는 카카오톡 챗봇이다.
+# 앱 시작 시 DB 연결
+conn = psycopg.connect(DATABASE_URL)
 
-규칙:
-- 항상 한국어로 답변
-- 너무 길게 쓰지 말 것
-- 먼저 한 줄 요약
-- 그 다음 핵심 포인트 3개 이내
-- 위험물, 안전, 응급 관련 질문은 '즉시 해야 할 행동'을 우선
-- 과도한 꾸밈말 없이 친절하고 단정하게
-- 출력은 반드시 JSON만 반환
-- JSON 스키마:
-{
-  "summary": "한 줄 요약",
-  "points": ["핵심1", "핵심2", "핵심3"],
-  "followups": ["후속질문1", "후속질문2"]
-}
-"""
 
-def extract_user_text(payload: Dict[str, Any]) -> str:
-    return (
-        payload.get("userRequest", {}).get("utterance")
-        or payload.get("action", {}).get("params", {}).get("question", "")
-        or ""
-    ).strip()
-
-def safe_parse_model_json(text: str) -> Dict[str, Any]:
-    text = text.strip()
-    text = re.sub(r"^```json\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return normalize_response(data)
-    except Exception:
-        pass
-
-    return normalize_response({
-        "summary": text[:120] if text else "답변을 준비했어요.",
-        "points": [],
-        "followups": ["다시 설명해줘", "예시로 알려줘"]
-    })
-
-def normalize_response(data: Dict[str, Any]) -> Dict[str, Any]:
-    summary = str(data.get("summary", "답변을 준비했어요.")).strip()
-
-    points = data.get("points", [])
-    if not isinstance(points, list):
-        points = []
-    points = [str(p).strip() for p in points if str(p).strip()][:3]
-
-    followups = data.get("followups", [])
-    if not isinstance(followups, list):
-        followups = []
-    followups = [str(f).strip() for f in followups if str(f).strip()][:2]
-
-    if not followups:
-        followups = ["자세히 설명해줘", "다른 예시 알려줘"]
-
-    return {
-        "summary": summary[:120],
-        "points": [p[:120] for p in points],
-        "followups": [f[:20] for f in followups]
-    }
-
-def render_kakao_response(data: Dict[str, Any]) -> Dict[str, Any]:
-    desc_lines: List[str] = []
-
-    for idx, point in enumerate(data["points"], start=1):
-        desc_lines.append(f"{idx}. {point}")
-
-    description = "\n".join(desc_lines).strip()
-    if not description:
-        description = "궁금한 내용을 더 물어보시면 이어서 설명해드릴게요."
-
-    buttons = []
-    for followup in data["followups"]:
-        buttons.append({
-            "action": "message",
-            "label": followup[:14],
-            "messageText": followup
-        })
-
-    return {
-        "version": "2.0",
-        "template": {
-            "outputs": [
-                {
-                    "basicCard": {
-                        "title": data["summary"],
-                        "description": description[:500],
-                        "buttons": buttons
-                    }
-                }
-            ]
-        }
-    }
-
-@app.get("/")
-def health_check():
-    return {"ok": True}
-
-# 검증용
-@app.post("/kakao/skill")
-async def kakao_skill(request: Request):
-    return JSONResponse(content={
-        "version": "2.0",
-        "template": {
-            "outputs": [
-                {
-                    "simpleText": {
-                        "text": "연결 테스트 성공"
-                    }
-                }
-            ]
-        }
-    })
-
-# 실제 답변용
-@app.post("/kakao/chat")
-async def kakao_chat(request: Request):
-    try:
-        payload = await request.json()
-        user_text = extract_user_text(payload)
-
-        if not user_text:
-            return JSONResponse(content={
-                "version": "2.0",
-                "template": {
-                    "outputs": [
-                        {
-                            "simpleText": {
-                                "text": "질문을 입력해주세요."
-                            }
-                        }
-                    ]
-                }
-            })
-
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_text}
-            ]
+def get_chemical_info(name: str):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT name_ko, summary
+            FROM chemicals
+            WHERE name_ko = %s
+            """,
+            (name,),
         )
+        return cur.fetchone()
 
-        model_text = response.output_text
-        structured = safe_parse_model_json(model_text)
-        kakao_json = render_kakao_response(structured)
 
-        return JSONResponse(content=kakao_json)
+def get_hazards(name: str):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT h.hazard_type, h.description
+            FROM hazards h
+            JOIN chemicals c ON h.chemical_id = c.id
+            WHERE c.name_ko = %s
+            ORDER BY h.id
+            """,
+            (name,),
+        )
+        return cur.fetchall()
 
-    except Exception as e:
-        return JSONResponse(content={
+
+def get_responses(name: str):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.situation, r.action
+            FROM responses r
+            JOIN chemicals c ON r.chemical_id = c.id
+            WHERE c.name_ko = %s
+            ORDER BY r.id
+            """,
+            (name,),
+        )
+        return cur.fetchall()
+
+
+def extract_chemical_name(user_text: str) -> Optional[str]:
+    candidates = {
+        "휘발유": ["휘발유", "gasoline"],
+        "염산": ["염산", "hydrochloric acid", "hcl"],
+        "황산": ["황산", "sulfuric acid"],
+        "암모니아": ["암모니아", "ammonia"],
+        "벤젠": ["벤젠", "benzene"],
+    }
+
+    lower_text = user_text.lower()
+    for chemical_name, keywords in candidates.items():
+        for keyword in keywords:
+            if keyword.lower() in lower_text:
+                return chemical_name
+    return None
+
+
+def make_simple_text_response(text: str) -> JSONResponse:
+    return JSONResponse(
+        content={
             "version": "2.0",
             "template": {
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": f"일시적인 오류가 발생했어요. 다시 시도해주세요.\n({str(e)[:120]})"
+                            "text": text[:1000]
                         }
                     }
                 ]
             }
-        })
+        }
+    )
+
+
+@app.get("/")
+def health_check():
+    return {"ok": True}
+
+
+@app.post("/kakao/skill")
+async def kakao_skill(request: Request):
+    return make_simple_text_response("연결 테스트 성공")
+
+
+@app.post("/kakao/chat")
+async def kakao_chat(request: Request):
+    try:
+        payload = await request.json()
+        user_text = payload.get("userRequest", {}).get("utterance", "").strip()
+
+        if not user_text:
+            return make_simple_text_response("질문을 입력해주세요.")
+
+        chemical_name = extract_chemical_name(user_text)
+
+        if not chemical_name:
+            return make_simple_text_response(
+                "물질명을 포함해서 질문해주세요. 예: 휘발유 위험성 알려줘"
+            )
+
+        chemical = get_chemical_info(chemical_name)
+        hazards = get_hazards(chemical_name)
+        responses = get_responses(chemical_name)
+
+        if not chemical:
+            return make_simple_text_response(
+                f"{chemical_name} 정보가 아직 등록되어 있지 않습니다."
+            )
+
+        name_ko, summary = chemical
+        lines = [name_ko, f"요약: {summary}"]
+
+        if hazards:
+            lines.append("")
+            lines.append("[위험성]")
+            for hazard_type, description in hazards[:3]:
+                lines.append(f"- {hazard_type}: {description}")
+
+        if responses:
+            lines.append("")
+            lines.append("[대응법]")
+            for situation, action in responses[:3]:
+                lines.append(f"- {situation}: {action}")
+
+        return make_simple_text_response("\n".join(lines))
+
+    except Exception as e:
+        return make_simple_text_response(f"오류가 발생했습니다: {str(e)[:150]}")
