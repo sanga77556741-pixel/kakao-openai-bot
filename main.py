@@ -11,51 +11,55 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL 환경변수가 설정되지 않았습니다.")
 
-# 앱 시작 시 DB 연결
-conn = psycopg.connect(DATABASE_URL)
+
+def get_connection():
+    return psycopg.connect(DATABASE_URL)
 
 
 def get_chemical_info(name: str):
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT name_ko, summary
-            FROM chemicals
-            WHERE name_ko = %s
-            """,
-            (name,),
-        )
-        return cur.fetchone()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT name_ko, summary
+                FROM chemicals
+                WHERE name_ko = %s
+                """,
+                (name,),
+            )
+            return cur.fetchone()
 
 
 def get_hazards(name: str):
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT h.hazard_type, h.description
-            FROM hazards h
-            JOIN chemicals c ON h.chemical_id = c.id
-            WHERE c.name_ko = %s
-            ORDER BY h.id
-            """,
-            (name,),
-        )
-        return cur.fetchall()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT h.hazard_type, h.description
+                FROM hazards h
+                JOIN chemicals c ON h.chemical_id = c.id
+                WHERE c.name_ko = %s
+                ORDER BY h.id
+                """,
+                (name,),
+            )
+            return cur.fetchall()
 
 
 def get_responses(name: str):
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT r.situation, r.action
-            FROM responses r
-            JOIN chemicals c ON r.chemical_id = c.id
-            WHERE c.name_ko = %s
-            ORDER BY r.id
-            """,
-            (name,),
-        )
-        return cur.fetchall()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT r.situation, r.action
+                FROM responses r
+                JOIN chemicals c ON r.chemical_id = c.id
+                WHERE c.name_ko = %s
+                ORDER BY r.id
+                """,
+                (name,),
+            )
+            return cur.fetchall()
 
 
 def extract_chemical_name(user_text: str) -> Optional[str]:
