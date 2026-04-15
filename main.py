@@ -22,6 +22,7 @@ def get_chemical_info(name: str):
             cur.execute(
                 """
                 SELECT
+                    id,
                     name_ko,
                     summary,
                     physical_state,
@@ -36,6 +37,23 @@ def get_chemical_info(name: str):
                 (name,),
             )
             return cur.fetchone()
+
+
+def get_hazards_by_chemical_id(chemical_id: int):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    hazard_type,
+                    description
+                FROM hazards
+                WHERE chemical_id = %s
+                ORDER BY id
+                """,
+                (chemical_id,),
+            )
+            return cur.fetchall()
 
 
 def extract_chemical_name(user_text: str) -> Optional[str]:
@@ -106,6 +124,7 @@ async def kakao_chat(request: Request):
             )
 
         (
+            chemical_id,
             name_ko,
             summary,
             physical_state,
@@ -116,6 +135,8 @@ async def kakao_chat(request: Request):
             marine_spill_response,
         ) = chemical
 
+        hazards = get_hazards_by_chemical_id(chemical_id)
+
         lines = [name_ko, ""]
 
         if summary:
@@ -125,6 +146,15 @@ async def kakao_chat(request: Request):
             lines.append("")
             lines.append("[물질특성]")
             lines.append(f"- {physical_state}")
+
+        if hazards:
+            lines.append("")
+            lines.append("[주요 위험성]")
+            for hazard_type, description in hazards:
+                if description:
+                    lines.append(f"- {hazard_type}: {description}")
+                else:
+                    lines.append(f"- {hazard_type}")
 
         if ppe:
             lines.append("")
