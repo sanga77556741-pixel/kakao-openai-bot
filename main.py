@@ -21,7 +21,15 @@ def get_chemical_info(name: str):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT name_ko, summary
+                SELECT
+                    name_ko,
+                    summary,
+                    physical_state,
+                    ppe,
+                    precautions,
+                    human_hazard,
+                    fire_explosion_response,
+                    marine_spill_response
                 FROM chemicals
                 WHERE name_ko = %s
                 """,
@@ -131,19 +139,62 @@ async def kakao_chat(request: Request):
                 f"{chemical_name} 정보가 아직 등록되어 있지 않습니다."
             )
 
-        name_ko, summary = chemical
-        lines = [name_ko, f"요약: {summary}"]
+        (
+            name_ko,
+            summary,
+            physical_state,
+            ppe,
+            precautions,
+            human_hazard,
+            fire_explosion_response,
+            marine_spill_response,
+        ) = chemical
+
+        lines = [name_ko]
+
+        if summary:
+            lines.append(f"요약: {summary}")
+
+        if physical_state:
+            lines.append("")
+            lines.append("[물질특성]")
+            lines.append(f"- {physical_state}")
+
+        if ppe:
+            lines.append("")
+            lines.append("[주요 개인보호장구]")
+            lines.append(f"- {ppe}")
+
+        if precautions:
+            lines.append("")
+            lines.append("[주의사항]")
+            lines.append(f"- {precautions}")
+
+        if fire_explosion_response or marine_spill_response:
+            lines.append("")
+            lines.append("[대응방법]")
+
+            if fire_explosion_response:
+                lines.append(f"- 화재·폭발: {fire_explosion_response}")
+
+            if marine_spill_response:
+                lines.append(f"- 해상유출: {marine_spill_response}")
+
+        if human_hazard:
+            lines.append("")
+            lines.append("[인체유해성]")
+            lines.append(f"- {human_hazard}")
 
         if hazards:
             lines.append("")
-            lines.append("[위험성]")
+            lines.append("[추가 위험성]")
             for hazard_type, description in hazards[:3]:
                 lines.append(f"- {hazard_type}: {description}")
 
         if responses:
             lines.append("")
-            lines.append("[대응법]")
-            for situation, action in responses[:3]:
+            lines.append("[기타 대응정보]")
+            for situation, action in responses[:2]:
                 lines.append(f"- {situation}: {action}")
 
         return make_simple_text_response("\n".join(lines))
