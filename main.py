@@ -38,38 +38,6 @@ def get_chemical_info(name: str):
             return cur.fetchone()
 
 
-def get_hazards(name: str):
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT h.hazard_type, h.description
-                FROM hazards h
-                JOIN chemicals c ON h.chemical_id = c.id
-                WHERE c.name_ko = %s
-                ORDER BY h.id
-                """,
-                (name,),
-            )
-            return cur.fetchall()
-
-
-def get_responses(name: str):
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT r.situation, r.action
-                FROM responses r
-                JOIN chemicals c ON r.chemical_id = c.id
-                WHERE c.name_ko = %s
-                ORDER BY r.id
-                """,
-                (name,),
-            )
-            return cur.fetchall()
-
-
 def extract_chemical_name(user_text: str) -> Optional[str]:
     candidates = {
         "휘발유": ["휘발유", "gasoline"],
@@ -131,8 +99,6 @@ async def kakao_chat(request: Request):
             )
 
         chemical = get_chemical_info(chemical_name)
-        hazards = get_hazards(chemical_name)
-        responses = get_responses(chemical_name)
 
         if not chemical:
             return make_simple_text_response(
@@ -150,7 +116,7 @@ async def kakao_chat(request: Request):
             marine_spill_response,
         ) = chemical
 
-        lines = [name_ko]
+        lines = [name_ko, ""]
 
         if summary:
             lines.append(f"요약: {summary}")
@@ -184,18 +150,6 @@ async def kakao_chat(request: Request):
             lines.append("")
             lines.append("[인체유해성]")
             lines.append(f"- {human_hazard}")
-
-        if hazards:
-            lines.append("")
-            lines.append("[추가 위험성]")
-            for hazard_type, description in hazards[:3]:
-                lines.append(f"- {hazard_type}: {description}")
-
-        if responses:
-            lines.append("")
-            lines.append("[기타 대응정보]")
-            for situation, action in responses[:2]:
-                lines.append(f"- {situation}: {action}")
 
         return make_simple_text_response("\n".join(lines))
 
