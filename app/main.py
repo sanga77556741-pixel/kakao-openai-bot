@@ -21,25 +21,32 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
-def get_chemical_info_by_id(chemical_id: int):
+def get_chemical_info_by_user_text(user_text: str):
+    normalized_text = normalize_text(user_text)
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT
-                    id,
-                    name_ko,
-                    summary,
-                    physical_state,
-                    ppe,
-                    precautions,
-                    human_hazard,
-                    fire_explosion_response,
-                    marine_spill_response
-                FROM chemicals
-                WHERE id = %s
+                    c.id,
+                    c.name_ko,
+                    c.summary,
+                    c.physical_state,
+                    c.ppe,
+                    c.precautions,
+                    c.human_hazard,
+                    c.fire_explosion_response,
+                    c.marine_spill_response
+                FROM chemicals c
+                LEFT JOIN chemical_aliases a
+                    ON c.id = a.chemical_id
+                WHERE LOWER(c.name_ko) LIKE %s
+                   OR LOWER(a.alias) LIKE %s
+                ORDER BY c.id
+                LIMIT 1
                 """,
-                (chemical_id,),
+                (f"%{normalized_text}%", f"%{normalized_text}%"),
             )
             return cur.fetchone()
 
@@ -59,37 +66,6 @@ def get_hazards_by_chemical_id(chemical_id: int):
                 (chemical_id,),
             )
             return cur.fetchall()
-
-
-def find_chemical_by_user_text(user_text: str) -> Optional[dict]:
-    normalized_user_text = normalize_text(user_text)
-
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    c.id,
-                    c.name_ko,
-                    a.alias
-                FROM chemical_aliases a
-                JOIN chemicals c
-                  ON c.id = a.chemical_id
-                ORDER BY LENGTH(a.alias) DESC
-                """
-            )
-            rows = cur.fetchall()
-
-    for chemical_id, name_ko, alias in rows:
-        normalized_alias = normalize_text(alias)
-        if normalized_alias and normalized_alias in normalized_user_text:
-            return {
-                "chemical_id": chemical_id,
-                "name_ko": name_ko,
-                "matched_alias": alias,
-            }
-
-    return None
 
 
 def extract_intent(user_text: str) -> str:
@@ -155,20 +131,12 @@ async def kakao_chat(request: Request):
         if not user_text:
             return make_simple_text_response("질문을 입력해주세요.")
 
-        chemical_match = find_chemical_by_user_text(user_text)
-
-        if not chemical_match:
-            return make_simple_text_response(
-                "물질명을 포함해서 질문해주세요. 예: 염산 위험성 알려줘"
-            )
-
         intent = extract_intent(user_text)
-
-        chemical = get_chemical_info_by_id(chemical_match["chemical_id"])
+        chemical = get_chemical_info_by_user_text(user_text)
 
         if not chemical:
             return make_simple_text_response(
-                f"{chemical_match['name_ko']} 정보가 아직 등록되어 있지 않습니다."
+                "물질명을 포함해서 질문해주세요. 예: 염산 위험성 알려줘"
             )
 
         (
@@ -239,25 +207,23 @@ async def kakao_chat(request: Request):
                 lines.append(f"- {human_hazard}")
 
         elif intent == "summary":
+            lines.append("")
             if summary:
-                lines.append("")
                 lines.append(f"요약: {summary}")
             else:
-                lines.append("")
                 lines.append("요약 정보가 없습니다.")
 
         elif intent == "physical_state":
+            lines.append("")
             if physical_state:
-                lines.append("")
                 lines.append("[물질특성]")
                 lines.append(f"- {physical_state}")
             else:
-                lines.append("")
                 lines.append("물질특성 정보가 없습니다.")
 
         elif intent == "hazards":
+            lines.append("")
             if hazards:
-                lines.append("")
                 lines.append("[주요 위험성]")
 
                 seen = set()
@@ -272,30 +238,27 @@ async def kakao_chat(request: Request):
                     else:
                         lines.append(f"- {hazard_type}")
             else:
-                lines.append("")
                 lines.append("위험성 정보가 없습니다.")
 
         elif intent == "ppe":
+            lines.append("")
             if ppe:
-                lines.append("")
                 lines.append("[주요 개인보호장구]")
                 lines.append(f"- {ppe}")
             else:
-                lines.append("")
                 lines.append("개인보호장구 정보가 없습니다.")
 
         elif intent == "precautions":
+            lines.append("")
             if precautions:
-                lines.append("")
                 lines.append("[주의사항]")
                 lines.append(f"- {precautions}")
             else:
-                lines.append("")
                 lines.append("주의사항 정보가 없습니다.")
 
         elif intent == "response":
+            lines.append("")
             if fire_explosion_response or marine_spill_response:
-                lines.append("")
                 lines.append("[대응방법]")
 
                 if fire_explosion_response:
@@ -304,16 +267,14 @@ async def kakao_chat(request: Request):
                 if marine_spill_response:
                     lines.append(f"- 해상유출: {marine_spill_response}")
             else:
-                lines.append("")
                 lines.append("대응방법 정보가 없습니다.")
 
         elif intent == "human_hazard":
+            lines.append("")
             if human_hazard:
-                lines.append("")
                 lines.append("[인체유해성]")
                 lines.append(f"- {human_hazard}")
             else:
-                lines.append("")
                 lines.append("인체유해성 정보가 없습니다.")
 
         else:
